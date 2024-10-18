@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <ctime>
 #include <queue>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 using namespace std;
 
@@ -23,10 +25,17 @@ struct solution {
     int gen;
 };
 
+//定义图信息,传递给python
+struct graph_info {
+    vector<node> city_loc;
+    vector<int>  best_individuals;
+    vector<int> best_path;
+};
 
+graph_info info; //图信息
 int curGen = 1; //当前代数
 bool isFound = false;   //是否找到最优解
-const int maxGen = 10000; //最大代数
+//const int maxGen = 10000; //最大代数
 const int start = 1;    //起点
 int packNum = 20;    //种群容量
 double mutationP = 0.04;   //变异概率
@@ -39,13 +48,13 @@ vector<solution> pack;  //种群
 unordered_map<int, unordered_map<int, double> > dis;    //记录城市两两之间的距离
 queue<double> record;   //传代统计队列
 
-regex pattern("^(\\d+) (\\d+) (\\d+)$"); //读入数据的正则表达式
+regex pattern("^(\\d+) (\\d+) (\\d+)\r?$"); //读入数据的正则表达式
 
 //计算两个城市之间的距离
 double distanceBetween(node &a, node &b) {
     int x = a.x - b.x;
     int y = a.y - b.y;
-    return ceil(sqrt((x * x + y * y) / 10.0));
+    return ceil(sqrt(x * x + y * y));
 }
 
 //计算个体的解
@@ -64,7 +73,7 @@ bool cmp(const solution &a, const solution &b) {
 
 //初始化数据
 void initData() {
-    ifstream f("att48.tsp", ios::in);
+    ifstream f("city_data.txt", ios::in);
     /*
      * att48.tsp format
      * number coordinate_x coordinate_y
@@ -140,10 +149,11 @@ void initPack(int gen) {
 
 //传代
 void passOn() {
-    record.push(pack[0].sum);
-    //对每一代的最优解进行记录，如果超过1000代相同则进行传代操作
+    record.push(pack[0].sum);   //对每一代的最优解进行记录
+    //如果超过500代相同则进行传代操作
     if (record.size() > 500) {
         record.pop();
+        //cout << record.front() << " " << record.back() << ' ' << curCost << endl;
         //传代后第一次变化前不进行传代，避免过早指数爆炸
         if (curCost != pack[0].sum && record.front() == record.back()) {
             //cout << "Pass On!" << endl;
@@ -154,7 +164,7 @@ void passOn() {
             //在最大传代限制前进行种群扩增
             if (Hayflick > 0) {
                 Hayflick--;
-                packNum *= log(packNum) / log(10);
+                packNum *= log10(packNum);
             }
             //重新初始化种群，并将火种压入
             initPack(gen);
@@ -176,7 +186,7 @@ solution cross(solution &firstParent, solution &secondParent) {
     //随机选择长度与起点
     int length = int((rand() % 1000 / 1000.0) * city.size());
     int off = rand() % city.size() + 1;
-    vector<int> nextGen(firstParent.path.size());
+    vector<int> nextGen(firstParent.path.size(), 0);
     unordered_map<int, bool> selected;
     nextGen[0] = start;
     for (int i = off; i < nextGen.size() - 1 && i < off + length; i++) {
@@ -259,7 +269,8 @@ vector<solution> process() {
     double total = 0;   //总适应度
     vector<solution> nextGenPack;   //下一代种群
     sort(pack.begin(), pack.end() - 1, cmp);    //排序找出最优个体
-    printf("%d %d\n", pack[0].gen, (int) pack[0].sum);
+    //printf("%d %d\n", pack[0].gen, (int) pack[0].sum);
+    info.best_individuals.push_back(pack[0].sum);
     if (pack[0].sum == 10628) {
         isFound = true;
     }
@@ -297,19 +308,38 @@ vector<solution> process() {
     return nextGenPack;
 }
 
-int main() {
+graph_info solution_from_cpp(int maxGen) {
     clock_t start = clock();
     srand(unsigned(time(NULL)));    //设置时间种子
     initData();     //初始化数据
     initPack(1);    //初始化种群
+    info.city_loc = city;
     while (!isFound && curGen <= maxGen) {
         pack = process();
         curGen++;
     }
     cout << "Total time: " << double(clock() - start) / CLOCKS_PER_SEC << endl;
     cout << "The best: " << pack[0].sum << endl;
-    for (auto it = pack[0].path.begin(); it != pack[0].path.end(); it++) {
-        cout << *it << " ";
-    }
-    return 0;
+    info.best_path = pack[0].path;
+    return info;
 }
+
+namespace py = pybind11;
+
+PYBIND11_MODULE(GA, m) {
+    // 暴露 node 结构体
+    py::class_<node>(m, "Node")
+        .def(py::init<>())  // 默认构造函数
+        .def_readwrite("num", &node::num)
+        .def_readwrite("x", &node::x)
+        .def_readwrite("y", &node::y);
+    // 暴露 graph_info 结构体
+    py::class_<graph_info>(m, "GraphInfo")
+        .def(py::init<>())  // 默认构造函数
+        .def_readwrite("city_loc", &graph_info::city_loc)
+        .def_readwrite("best_individuals", &graph_info::best_individuals)
+        .def_readwrite("best_path", &graph_info::best_path);
+    m.doc() = "遗传算法求解tsp问题" ; // optional module docstring
+    m.def("solution_from_cpp", &solution_from_cpp, "求解tsp问题"); // 绑定函数
+}
+
